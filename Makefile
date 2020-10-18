@@ -6,7 +6,7 @@ DAGTAG_NOSANCHECKS := nosanchecks_DAGger nosanchecks_qringbuf
 
 build: dataset
 	@mkdir -p bin/
-	rm bin/fil-discover-check
+	@rm -f bin/fil-discover-check
 	$(DAGGO) build \
 		-o bin/fil-discover-check ./cmd/fil-discover-check
 	$(DAGGO) run github.com/GeertJohan/go.rice/rice append --exec bin/fil-discover-check -i ./cmd/fil-discover-check
