@@ -252,6 +252,11 @@ func main() {
 	}
 	log.Printf("Upload took place with response: %d", resp.StatusCode)
 
+	if resp.StatusCode != 200 {
+		log.Printf("\n\n\nManifest upload FAILED!!! Get in touch with riba, DO NOT ship drive: set it aside\n\n")
+		os.Exit(1)
+	}
+
 	if dc.Flawless > 6900 && dc.CarfilesPerDataset["UNKNOWN"] == 0 {
 		log.Printf(`
 
