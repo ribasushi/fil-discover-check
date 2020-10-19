@@ -82,7 +82,9 @@ func main() {
 	dc.resolveMountpoint()
 
 	log.Printf("Processing Filecoin Discover drive %s", dc.DriveIdentifier)
-	log.Printf("Gathering filenames from %s...", dc.drivePath)
+	log.Printf("Gathering about 7,000 filenames from %s...", dc.drivePath)
+
+	bar := pb.Full.Start(0).SetRefreshRate(5 * time.Second)
 
 	nameExtract := regexp.MustCompile(`/(bafyr[a-z0-9A-Z]+)\.car$`)
 
@@ -123,6 +125,7 @@ func main() {
 					}
 
 					dc.Carfiles[cid.String()] = &ci
+					bar.Increment()
 				}
 			}
 			return nil
@@ -130,6 +133,7 @@ func main() {
 	); err != nil {
 		log.Fatal("Error encounterd while collecting list of available car files")
 	}
+	bar.Finish()
 
 	log.Printf("Found total of %d car files", len(dc.Carfiles))
 
@@ -137,44 +141,75 @@ func main() {
 		log.Printf("\t%d\tbelong to dataset\t%s\n", dc.CarfilesPerDataset[k], k)
 	}
 
-	bar := pb.Full.Start(len(dc.Carfiles)).SetRefreshRate(5 * time.Second)
+	bar = pb.Full.Start(len(dc.Carfiles)).SetRefreshRate(5 * time.Second)
 
-	spotcheckGovernor := make(chan struct{}, 3)
-	commpGovernor := make(chan struct{}, 1)
+	commpQueue := make(chan string, 20000)
+	spotCheckQueue := make(chan string, 20000)
 	var wg sync.WaitGroup
 
-	log.Printf("Validating car well-formedness")
+	log.Printf("Validating contents...")
 
-	for key := range dc.Carfiles {
+	for key, carInfo := range dc.Carfiles {
 		wg.Add(1)
+		// always commP
+		if len(carInfo.SoftFails) > 0 {
+			commpQueue <- key
+		} else {
+			spotCheckQueue <- key
+		}
+	}
 
-		select {
-		case commpGovernor <- struct{}{}:
-			go func(key string) {
-				dc.Carfiles[key].CommpValidated = dc.validateCommP(key)
-				bar.Increment()
-				wg.Done()
-				<-commpGovernor
-			}(key)
-		case spotcheckGovernor <- struct{}{}:
-			go func(key string) {
+	go func() {
+		for {
+
+			var key string
+			var isOpen bool
+
+			select {
+			case key, isOpen = <-commpQueue:
+			default:
+				key, isOpen = <-spotCheckQueue
+			}
+
+			if !isOpen {
+				return
+			}
+
+			dc.Carfiles[key].CommpValidated = dc.validateCommP(key)
+			bar.Increment()
+			wg.Done()
+		}
+	}()
+
+	wCount := 2
+	for wCount > 0 {
+		wCount--
+		go func() {
+			for {
+				key, isOpen := <-spotCheckQueue
+				if !isOpen {
+					return
+				}
 				dc.Carfiles[key].CarHeaderValidated = dc.validateCarStructure(key)
 				bar.Increment()
 				wg.Done()
-				<-spotcheckGovernor
-			}(key)
-		}
+			}
+		}()
 	}
+
 	wg.Wait()
+	close(commpQueue)
+	close(spotCheckQueue)
 	bar.Finish()
 
 	for _, ci := range dc.Carfiles {
 		if len(ci.HardFails) > 0 {
 			dc.HardFailures++
-		} else if len(ci.SoftFails) > 0 {
-			dc.SoftFailures++
 		} else {
 			dc.Flawless++
+		}
+		if len(ci.SoftFails) > 0 {
+			dc.SoftFailures++
 		}
 	}
 
@@ -213,7 +248,7 @@ func main() {
 	}
 	log.Printf("Upload took place with response: %d", resp.StatusCode)
 
-	if dc.Flawless > 6900 {
+	if dc.Flawless > 6900 && dc.CarfilesPerDataset["UNKNOWN"] == 0 {
 		log.Printf(`
 
 === <3 === <3 === <3 === <3 === <3 === <3 === <3 === <3 === <3 === <3 ===
@@ -266,7 +301,7 @@ func (dc *DumboChecker) validateCommP(cidString string) (ok bool) {
 
 	carInfo.HardFails = append(carInfo.HardFails, fmt.Sprintf(
 		"lower commP bytes of car '%x' do not match expected valie '%x'",
-		commP,
+		commP[len(commP)-16:],
 		known,
 	))
 	return
@@ -298,7 +333,7 @@ func (dc *DumboChecker) validateCarStructure(cidString string) (ok bool) {
 	}
 
 	blockCount := 0
-	for blockCount < 16 {
+	for blockCount < 15 {
 		_, err := cr.Next()
 		if err == io.EOF {
 			return
