@@ -91,47 +91,51 @@ func main() {
 	if err := filepath.Walk(
 		dc.drivePath,
 		func(path string, fi os.FileInfo, err error) error {
-			if err != nil {
+			if err != nil && fi.Name() != "lost+found" {
 				return err
 			}
-			if fi.Mode().IsRegular() {
-				if f := nameExtract.FindStringSubmatch(path); len(f) > 0 {
+			if !fi.Mode().IsRegular() {
+				return nil
+			}
 
-					cid, err := cid.Parse(f[1])
-					if err != nil {
-						log.Fatalf("Undecodeable CID '%s': %s", f[1], err)
-					}
+			f := nameExtract.FindStringSubmatch(path)
+			if len(f) == 0 {
+				return nil
+			}
 
-					ci := carInfo{
-						ByteSize:  fi.Size(),
-						FullPath:  path[len(dc.drivePath)+1:],
-						SoftFails: make([]string, 0),
-						HardFails: make([]string, 0),
-					}
-					copy(ci.key[:], cid.Bytes()[len(cid.Bytes())-16:])
+			cid, err := cid.Parse(f[1])
+			if err != nil {
+				log.Fatalf("Undecodeable CID '%s': %s", f[1], err)
+			}
 
-					known, exists := knownCars[ci.key]
-					if !exists {
-						dc.CarfilesPerDataset["UNKNOWN"] = dc.CarfilesPerDataset["UNKNOWN"] + 1
-						ci.HardFails = append(ci.HardFails, "payload not found in the Filecoin Discover set")
-					} else {
-						ci.DatasetID = known.datasetID
-						dc.CarfilesPerDataset[dataSets[known.datasetID]] = dc.CarfilesPerDataset[dataSets[known.datasetID]] + 1
-						if int64(known.expectedSize) == ci.ByteSize {
-							ci.ByteSizeValidated = true
-						} else {
-							ci.SoftFails = append(ci.HardFails, "car file size does not match expected dynamo value")
-						}
-					}
+			ci := carInfo{
+				ByteSize:  fi.Size(),
+				FullPath:  path[len(dc.drivePath)+1:],
+				SoftFails: make([]string, 0),
+				HardFails: make([]string, 0),
+			}
+			copy(ci.key[:], cid.Bytes()[len(cid.Bytes())-16:])
 
-					dc.Carfiles[cid.String()] = &ci
-					bar.Increment()
+			known, exists := knownCars[ci.key]
+			if !exists {
+				dc.CarfilesPerDataset["UNKNOWN"] = dc.CarfilesPerDataset["UNKNOWN"] + 1
+				ci.HardFails = append(ci.HardFails, "payload not found in the Filecoin Discover set")
+			} else {
+				ci.DatasetID = known.datasetID
+				dc.CarfilesPerDataset[dataSets[known.datasetID]] = dc.CarfilesPerDataset[dataSets[known.datasetID]] + 1
+				if int64(known.expectedSize) == ci.ByteSize {
+					ci.ByteSizeValidated = true
+				} else {
+					ci.SoftFails = append(ci.HardFails, "car file size does not match expected dynamo value")
 				}
 			}
+
+			dc.Carfiles[cid.String()] = &ci
+			bar.Increment()
 			return nil
 		},
 	); err != nil {
-		log.Fatal("Error encounterd while collecting list of available car files")
+		log.Fatalf("Error encounterd while collecting list of available car files: %s", err)
 	}
 	bar.Finish()
 
